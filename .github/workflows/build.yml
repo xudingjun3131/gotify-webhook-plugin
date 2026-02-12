@@ -1,0 +1,128 @@
+name: Build and Release Plugin
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      gotify_version:
+        description: 'Gotify server version to build against'
+        required: false
+        default: 'v2.8.0'
+        type: string
+
+env:
+  PLUGIN_NAME: gotify-webhook-plugin
+  GOTIFY_VERSION: ${{ github.event.inputs.gotify_version || 'v2.8.0' }}
+
+jobs:
+  build:
+    name: Build Plugin
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        arch: [linux-amd64, linux-arm64, linux-arm-7]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install gomod-cap
+        run: go install github.com/gotify/plugin-api/cmd/gomod-cap@latest
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Get Gotify server Go version
+        run: |
+          wget -q -O build/gotify-server-go-version \
+            "https://raw.githubusercontent.com/gotify/server/${{ env.GOTIFY_VERSION }}/GO_VERSION"
+          echo "GO_VERSION=$(cat build/gotify-server-go-version)" >> $GITHUB_ENV
+          echo "Building with Go version: $(cat build/gotify-server-go-version)"
+
+      - name: Update go.mod to match Gotify server
+        run: |
+          wget -q -O build/gotify-server.mod \
+            "https://raw.githubusercontent.com/gotify/server/${{ env.GOTIFY_VERSION }}/go.mod"
+          gomod-cap -from build/gotify-server.mod -to go.mod
+          rm build/gotify-server.mod || true
+          go mod tidy
+
+      - name: Build plugin (${{ matrix.arch }})
+        run: |
+          docker run --rm \
+            -v "$PWD/.:'/proj'" \
+            -v "$(go env GOPATH)/pkg/mod/.:/go/pkg/mod:ro" \
+            -w /proj \
+            gotify/build:${{ env.GO_VERSION }}-${{ matrix.arch }} \
+            go build -mod=readonly -a -installsuffix cgo -ldflags "$LD_FLAGS" \
+              -buildmode=plugin \
+              -o /proj/build/${{ env.PLUGIN_NAME }}-${{ matrix.arch }}.so \
+              /proj
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-${{ matrix.arch }}
+          path: build/${{ env.PLUGIN_NAME }}-${{ matrix.arch }}.so
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -name "*.so" -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd release
+          sha256sum *.so > checksums-sha256.txt
+          cat checksums-sha256.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## Gotify Webhook Plugin ${{ github.ref_name }}
+
+            Built against Gotify server `${{ env.GOTIFY_VERSION }}`
+
+            ### 安装方法
+            1. 下载与你的服务器架构对应的 `.so` 文件
+            2. 放入 Gotify 服务端的 `data/plugins/` 目录
+            3. 重启 Gotify 服务端
+            4. 在插件页面启用并配置
+
+            ### 架构说明
+            | 文件 | 架构 | 适用场景 |
+            |------|------|---------|
+            | `*-linux-amd64.so` | x86_64 | 普通服务器/VPS |
+            | `*-linux-arm64.so` | ARM64 | 树莓派 4/5、ARM 服务器 |
+            | `*-linux-arm-7.so` | ARMv7 | 树莓派 2/3、旧版 ARM |
+          files: |
+            release/*.so
+            release/checksums-sha256.txt
+          draft: false
+          prerelease: false
