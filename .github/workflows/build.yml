@@ -58,7 +58,7 @@ jobs:
       - name: Build plugin (${{ matrix.arch }})
         run: |
           docker run --rm \
-            -v "$PWD/.:'/proj'" \
+            -v "$PWD/.:/proj" \
             -v "$(go env GOPATH)/pkg/mod/.:/go/pkg/mod:ro" \
             -w /proj \
             gotify/build:${{ env.GO_VERSION }}-${{ matrix.arch }} \
