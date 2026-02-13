@@ -362,6 +362,9 @@ func TestGetDisplay(t *testing.T) {
 				Enabled:   true,
 				Platforms: map[string]PlatformReceiveConfig{"wecom": {Enabled: true}},
 			},
+			HTML2MD: HTML2MDConfig{
+				Enabled: true,
+			},
 		},
 	}
 
@@ -372,4 +375,112 @@ func TestGetDisplay(t *testing.T) {
 	assert.Contains(t, display, "ops-dingtalk")
 	assert.Contains(t, display, "🔑")
 	assert.Contains(t, display, "Name 命名规则")
+	assert.Contains(t, display, "HTML")
+	assert.Contains(t, display, "✅ 启用")
+}
+
+// --- HTML to Markdown Converter Tests ---
+
+func TestConvertHTMLToMarkdown_BasicTags(t *testing.T) {
+	html := "<h1>标题</h1><p>这是一段<b>加粗</b>文本</p>"
+	md, err := ConvertHTMLToMarkdown(html)
+	require.NoError(t, err)
+	assert.Contains(t, md, "# 标题")
+	assert.Contains(t, md, "**加粗**")
+}
+
+func TestConvertHTMLToMarkdown_List(t *testing.T) {
+	html := "<ul><li>项目一</li><li>项目二</li></ul>"
+	md, err := ConvertHTMLToMarkdown(html)
+	require.NoError(t, err)
+	assert.Contains(t, md, "项目一")
+	assert.Contains(t, md, "项目二")
+}
+
+func TestConvertHTMLToMarkdown_Link(t *testing.T) {
+	html := `<a href="https://example.com">链接</a>`
+	md, err := ConvertHTMLToMarkdown(html)
+	require.NoError(t, err)
+	assert.Contains(t, md, "[链接](https://example.com)")
+}
+
+func TestConvertHTMLToMarkdown_Empty(t *testing.T) {
+	md, err := ConvertHTMLToMarkdown("")
+	require.NoError(t, err)
+	assert.Equal(t, "", md)
+
+	md, err = ConvertHTMLToMarkdown("   ")
+	require.NoError(t, err)
+	assert.Equal(t, "", md)
+}
+
+func TestConvertHTMLToMarkdown_PlainText(t *testing.T) {
+	md, err := ConvertHTMLToMarkdown("这是纯文本")
+	require.NoError(t, err)
+	assert.Equal(t, "这是纯文本", md)
+}
+
+func TestConvertHTMLToMarkdown_Table(t *testing.T) {
+	html := "<table><tr><th>名称</th><th>值</th></tr><tr><td>CPU</td><td>99%</td></tr></table>"
+	md, err := ConvertHTMLToMarkdown(html)
+	require.NoError(t, err)
+	assert.Contains(t, md, "CPU")
+	assert.Contains(t, md, "99%")
+}
+
+func TestExtractHTMLTitle_FromTitle(t *testing.T) {
+	html := "<html><head><title>我的标题</title></head><body><p>内容</p></body></html>"
+	assert.Equal(t, "我的标题", ExtractHTMLTitle(html))
+}
+
+func TestExtractHTMLTitle_FromH1(t *testing.T) {
+	html := "<h1>告警标题</h1><p>内容</p>"
+	assert.Equal(t, "告警标题", ExtractHTMLTitle(html))
+}
+
+func TestExtractHTMLTitle_TitleOverH1(t *testing.T) {
+	html := "<html><head><title>Title标题</title></head><body><h1>H1标题</h1></body></html>"
+	assert.Equal(t, "Title标题", ExtractHTMLTitle(html))
+}
+
+func TestExtractHTMLTitle_NoTitle(t *testing.T) {
+	html := "<p>没有标题的内容</p>"
+	assert.Equal(t, "", ExtractHTMLTitle(html))
+}
+
+func TestExtractHTMLTitle_Empty(t *testing.T) {
+	assert.Equal(t, "", ExtractHTMLTitle(""))
+}
+
+// --- DefaultConfig HTML2MD Test ---
+
+func TestDefaultConfig_HTML2MD(t *testing.T) {
+	p := &WebhookPlugin{}
+	cfg := p.DefaultConfig()
+	config, ok := cfg.(*Config)
+	assert.True(t, ok)
+	assert.True(t, config.HTML2MD.Enabled)
+}
+
+// --- IsHTML Detection Tests ---
+
+func TestIsHTML_True(t *testing.T) {
+	assert.True(t, IsHTML("<h1>标题</h1>"))
+	assert.True(t, IsHTML("<p>段落</p>"))
+	assert.True(t, IsHTML("<div class='test'>内容</div>"))
+	assert.True(t, IsHTML("前面有文字 <b>加粗</b> 后面也有"))
+	assert.True(t, IsHTML("<table><tr><td>表格</td></tr></table>"))
+	assert.True(t, IsHTML("<br/>"))
+	assert.True(t, IsHTML("<img src='test.png'>"))
+	assert.True(t, IsHTML("<a href='url'>链接</a>"))
+}
+
+func TestIsHTML_False(t *testing.T) {
+	assert.False(t, IsHTML("这是纯文本"))
+	assert.False(t, IsHTML("hello world"))
+	assert.False(t, IsHTML("### Markdown 标题"))
+	assert.False(t, IsHTML("**加粗** 和 *斜体*"))
+	assert.False(t, IsHTML(""))
+	assert.False(t, IsHTML("a < b > c")) // 数学比较，不是 HTML
+	assert.False(t, IsHTML("温度 < 30度"))
 }

@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/gotify/plugin-api"
+	plugin "github.com/gotify/plugin-api"
 )
 
 // namePattern validates that target names are URL-safe (alphanumeric, hyphens, underscores, dots).
@@ -136,6 +136,12 @@ func (p *WebhookPlugin) DefaultConfig() interface{} {
 				"feishu":   {Enabled: true, Secret: "YOUR_FEISHU_RECEIVE_SECRET"},
 				"custom":   {Enabled: true, Secret: "YOUR_CUSTOM_RECEIVE_TOKEN"},
 			},
+		},
+		// ===== HTML → Markdown 自动转换 =====
+		// 当入站消息（企微/钉钉/飞书/自定义）包含 HTML 内容时，
+		// 自动检测并转为 Markdown，利用 Gotify 前端原生渲染
+		HTML2MD: HTML2MDConfig{
+			Enabled: true,
 		},
 	}
 }
@@ -396,16 +402,38 @@ func (p *WebhookPlugin) RegisterWebhook(basePath string, g *gin.RouterGroup) {
 			}
 		}
 
-		title, message, priority, err := p.receiver.ParseAndVerify(c, platform, secret)
+		title, message, priority, isMarkdown, err := p.receiver.ParseAndVerify(c, platform, secret)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
+		}
+
+		// 仅当消息类型为 markdown 且启用了 HTML→Markdown 时，检测并转换 HTML
+		var extras map[string]interface{}
+		if isMarkdown && p.config.HTML2MD.Enabled && IsHTML(message) {
+			md, convErr := ConvertHTMLToMarkdown(message)
+			if convErr != nil {
+				log.Printf("[webhook-plugin] HTML→Markdown auto-conversion failed for %s: %v", platform, convErr)
+				// 转换失败时保持原始内容
+			} else {
+				message = md
+				log.Printf("[webhook-plugin] Auto-converted HTML→Markdown for %s message", platform)
+			}
+		}
+		// markdown 类型的消息始终注入 extras 以触发 Gotify 前端 Markdown 渲染
+		if isMarkdown {
+			extras = map[string]interface{}{
+				"client::display": map[string]interface{}{
+					"contentType": "text/markdown",
+				},
+			}
 		}
 
 		if err := p.msgHandler.SendMessage(plugin.Message{
 			Title:    title,
 			Message:  message,
 			Priority: priority,
+			Extras:   extras,
 		}); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create message: %v", err)})
 			return
@@ -414,6 +442,7 @@ func (p *WebhookPlugin) RegisterWebhook(basePath string, g *gin.RouterGroup) {
 		log.Printf("[webhook-plugin] Received %s message, created Gotify message: %s", platform, title)
 		c.JSON(http.StatusOK, gin.H{"status": "message created", "platform": platform})
 	})
+
 
 	// ===== 出站测试 =====
 	// POST /test          — 测试所有已启用目标
@@ -621,7 +650,7 @@ func (p *WebhookPlugin) GetDisplay(location *url.URL) string {
 	if baseURL != "" {
 		sb.WriteString("\n### 入站接收示例\n\n")
 
-		sb.WriteString("**企业微信 → Gotify（token 校验）：**\n")
+		sb.WriteString("**企业微信 Text → Gotify（token 校验）：**\n")
 		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=wecom&token=YOUR_TOKEN' \\\n", baseURL))
 		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
 		sb.WriteString("  -d '{\"msgtype\":\"text\",\"text\":{\"content\":\"来自企微的消息\"}}'\n```\n\n")
@@ -631,24 +660,64 @@ func (p *WebhookPlugin) GetDisplay(location *url.URL) string {
 		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
 		sb.WriteString("  -d '{\"msgtype\":\"markdown\",\"markdown\":{\"content\":\"### 告警\\n> CPU 超过 90%%\"}}'\n```\n\n")
 
-		sb.WriteString("**钉钉 → Gotify（签名验证，timestamp+sign 在 URL 参数中）：**\n")
+		sb.WriteString("**钉钉 Text → Gotify：**\n")
 		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=dingtalk' \\\n", baseURL))
 		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
 		sb.WriteString("  -d '{\"msgtype\":\"text\",\"text\":{\"content\":\"来自钉钉的消息\"}}'\n```\n\n")
 
-		sb.WriteString("**飞书 → Gotify（签名在 body 中）：**\n")
+		sb.WriteString("**钉钉 Markdown → Gotify：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=dingtalk' \\\n", baseURL))
+		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
+		sb.WriteString("  -d '{\"msgtype\":\"markdown\",\"markdown\":{\"title\":\"监控告警\",\"text\":\"### CPU 告警\\n使用率超过 **90%%**\"}}'\n```\n\n")
+
+		sb.WriteString("**飞书 Text → Gotify：**\n")
 		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=feishu' \\\n", baseURL))
 		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
 		sb.WriteString("  -d '{\"msg_type\":\"text\",\"content\":{\"text\":\"来自飞书的消息\"}}'\n```\n\n")
 
-		sb.WriteString("**自定义格式 → Gotify（token 校验）：**\n")
+		sb.WriteString("**飞书 Markdown → Gotify：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=feishu' \\\n", baseURL))
+		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
+		sb.WriteString("  -d '{\"msg_type\":\"markdown\",\"content\":{\"text\":\"### 告警\\n> CPU 超过 90%%\"}}'\n```\n\n")
+
+		sb.WriteString("**自定义 Text → Gotify（token 校验）：**\n")
 		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=custom&token=YOUR_TOKEN' \\\n", baseURL))
 		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
 		sb.WriteString("  -d '{\"title\":\"告警标题\",\"message\":\"告警详情内容\",\"priority\":5}'\n```\n\n")
+
+		sb.WriteString("**自定义 Markdown → Gotify（含 HTML 自动转换）：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=custom&token=YOUR_TOKEN' \\\n", baseURL))
+		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
+		sb.WriteString("  -d '{\"msgtype\":\"markdown\",\"title\":\"监控告警\",\"message\":\"<h1>CPU 告警</h1><p>使用率 <b>99%%</b></p>\",\"priority\":5}'\n```\n\n")
+
+		sb.WriteString("**自定义 — 纯 HTML Body：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=custom&token=YOUR_TOKEN' \\\n", baseURL))
+		sb.WriteString("  -H 'Content-Type: text/html' \\\n")
+		sb.WriteString("  -d '<h1>告警</h1><p>CPU 使用率 <b>99%%</b></p>'\n```\n\n")
 	}
 
 	sb.WriteString("### Name 命名规则\n")
-	sb.WriteString("Target name 必须是 URL 安全的字符串，只允许：`a-z A-Z 0-9 _ - .`\n")
+	sb.WriteString("Target name 必须是 URL 安全的字符串，只允许：`a-z A-Z 0-9 _ - .`\n\n")
+
+	// HTML → Markdown 功能说明
+	sb.WriteString("### HTML → Markdown 自动转换\n")
+	sb.WriteString("**仅当 `msgtype` 为 `markdown` 时**，插件才检测消息中的 HTML 标签并自动转为 Markdown。\n")
+	sb.WriteString("`text` 格式的消息不做任何转换。\n\n")
+	if p.config != nil {
+		html2mdStatus := "❌ 禁用"
+		if p.config.HTML2MD.Enabled {
+			html2mdStatus = "✅ 启用"
+		}
+		sb.WriteString(fmt.Sprintf("- 状态: %s\n", html2mdStatus))
+	}
+
+	sb.WriteString("\n**工作原理：**\n")
+	sb.WriteString("1. 通过 `/receive` 入站通道（企微/钉钉/飞书/自定义）接收消息\n")
+	sb.WriteString("2. 当 `msgtype/msg_type = markdown` 时，检测内容中的 HTML 标签\n")
+	sb.WriteString("3. 将 HTML 转换为 Markdown，写入 `content` 字段\n")
+	sb.WriteString("4. 自动注入 `extras.client::display.contentType = text/markdown`\n")
+	sb.WriteString("5. Gotify 前端使用内置 Markdown 渲染器展示\n\n")
+
 
 	return sb.String()
 }

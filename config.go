@@ -4,6 +4,12 @@ package main
 type Config struct {
 	Targets  []TargetConfig `json:"targets" yaml:"targets"`   // 出站：推送目标列表
 	Incoming IncomingConfig `json:"incoming" yaml:"incoming"` // 入站：接收 Webhook 配置
+	HTML2MD  HTML2MDConfig  `json:"html2md" yaml:"html2md"`   // HTML→Markdown 转换
+}
+
+// HTML2MDConfig defines settings for automatic HTML to Markdown conversion.
+type HTML2MDConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"` // 是否启用入站消息的 HTML 自动检测转换
 }
 
 // IncomingConfig defines settings for the incoming webhook receiver.
