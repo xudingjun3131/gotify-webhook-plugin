@@ -92,7 +92,7 @@ targets:
     webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_HOOK_ID"
     secret: "your_secret"
     enabled: true
-  - name: 自定义(必须英文)
+  - name: "自定义(必须英文)"
     platform: custom
     webhook_url: https://example.com/webhook
     enabled: false
@@ -154,3 +154,4 @@ gotify-webhook-plugin/
 ├── Makefile
 └── README.md
 ```
+
