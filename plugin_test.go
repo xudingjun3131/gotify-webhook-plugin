@@ -25,6 +25,8 @@ func TestPluginInfo(t *testing.T) {
 	assert.NotEmpty(t, info.ModulePath)
 	assert.NotEmpty(t, info.Name)
 	assert.Equal(t, "1.0.0", info.Version)
+	assert.Contains(t, info.Description, "Telegram")
+	assert.Contains(t, info.Description, "Slack")
 }
 
 // --- Config Tests ---
@@ -38,8 +40,14 @@ func TestDefaultConfig(t *testing.T) {
 	assert.True(t, ok)
 	assert.True(t, len(config.Targets) > 0, "default config should have example targets")
 
+	platforms := map[string]bool{}
 	for _, target := range config.Targets {
 		assert.False(t, target.Enabled, "default targets should be disabled")
+		platforms[target.Platform] = true
+	}
+
+	for _, pf := range []string{"wecom", "dingtalk", "feishu", "telegram", "email", "sns", "aliyun-sms", "tencent-sms", "discord", "slack", "custom"} {
+		assert.True(t, platforms[pf], "default config should contain platform %s", pf)
 	}
 }
 
@@ -48,8 +56,8 @@ func TestValidateConfig_Valid(t *testing.T) {
 	config := &Config{
 		Targets: []TargetConfig{
 			{Name: "group1", Platform: "wecom", WebhookURL: "https://example.com/1", Enabled: true},
-			{Name: "group2", Platform: "wecom", WebhookURL: "https://example.com/2", Enabled: true},
-			{Name: "ops", Platform: "dingtalk", WebhookURL: "https://example.com/3", Enabled: true},
+			{Name: "group2", Platform: "telegram", WebhookURL: "https://example.com/2", Enabled: true},
+			{Name: "ops", Platform: "tencent-sms", SMSAppID: "1400006666", Enabled: true},
 		},
 	}
 	err := p.ValidateAndSetConfig(config)
@@ -126,7 +134,7 @@ func TestValidateConfig_SameNameDiffPlatform(t *testing.T) {
 		},
 	}
 	err := p.ValidateAndSetConfig(config)
-	assert.NoError(t, err) // same name different platform is OK
+	assert.NoError(t, err)
 }
 
 func TestValidateConfig_MissingName(t *testing.T) {
@@ -151,6 +159,17 @@ func TestValidateConfig_MissingURL(t *testing.T) {
 	err := p.ValidateAndSetConfig(config)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "webhook_url is required")
+}
+
+func TestValidateConfig_TencentSMSAllowsSMSAppIDWithoutWebhookURL(t *testing.T) {
+	p := &WebhookPlugin{}
+	config := &Config{
+		Targets: []TargetConfig{
+			{Name: "sms", Platform: "tencent-sms", SMSAppID: "1400006666"},
+		},
+	}
+	err := p.ValidateAndSetConfig(config)
+	assert.NoError(t, err)
 }
 
 // --- Target Lookup Tests ---
@@ -197,7 +216,7 @@ func TestFindTargetsByPlatform(t *testing.T) {
 	}
 
 	targets := p.findTargetsByPlatform("wecom")
-	assert.Len(t, targets, 2) // only enabled ones
+	assert.Len(t, targets, 2)
 	assert.Equal(t, "g1", targets[0].Name)
 	assert.Equal(t, "g3", targets[1].Name)
 
@@ -298,6 +317,53 @@ func TestBuildNativeTestPayload_Feishu(t *testing.T) {
 	assert.Equal(t, "text", m["msg_type"])
 }
 
+func TestBuildNativeTestPayload_Telegram(t *testing.T) {
+	payload := buildNativeTestPayload("telegram")
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(payload, &m))
+	assert.Equal(t, "123456789", m["chat_id"])
+	assert.Contains(t, m["text"], "Telegram")
+}
+
+func TestBuildNativeTestPayload_Email(t *testing.T) {
+	payload := buildNativeTestPayload("email")
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(payload, &m))
+	assert.Equal(t, "Gotify Test", m["title"])
+	assert.Contains(t, m["message"], "Email")
+}
+
+func TestBuildNativeTestPayload_SNS(t *testing.T) {
+	payload := buildNativeTestPayload("sns")
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(payload, &m))
+	assert.Equal(t, "Gotify Test", m["subject"])
+	assert.Contains(t, m["message"], "Amazon SNS")
+}
+
+func TestBuildNativeTestPayload_SMS(t *testing.T) {
+	for _, pf := range []string{"aliyun-sms", "tencent-sms"} {
+		payload := buildNativeTestPayload(pf)
+		var m map[string]interface{}
+		require.NoError(t, json.Unmarshal(payload, &m))
+		assert.Contains(t, m["message"], "短信通道")
+	}
+}
+
+func TestBuildNativeTestPayload_Discord(t *testing.T) {
+	payload := buildNativeTestPayload("discord")
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(payload, &m))
+	assert.Contains(t, m["content"], "Discord")
+}
+
+func TestBuildNativeTestPayload_Slack(t *testing.T) {
+	payload := buildNativeTestPayload("slack")
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(payload, &m))
+	assert.Contains(t, m["text"], "Slack")
+}
+
 // --- Helper Tests ---
 
 func TestExtractSummary_WeCom(t *testing.T) {
@@ -315,6 +381,31 @@ func TestExtractSummary_Feishu(t *testing.T) {
 	assert.Equal(t, "飞书消息", extractSummary(body, "feishu"))
 }
 
+func TestExtractSummary_Telegram(t *testing.T) {
+	body := []byte(`{"text":"telegram hello"}`)
+	assert.Equal(t, "telegram hello", extractSummary(body, "telegram"))
+}
+
+func TestExtractSummary_Email(t *testing.T) {
+	body := []byte(`{"subject":"巡检报告","text":"巡检通过"}`)
+	assert.Equal(t, "巡检报告: 巡检通过", extractSummary(body, "email"))
+}
+
+func TestExtractSummary_SNS(t *testing.T) {
+	body := []byte(`{"Message":"CPU usage high"}`)
+	assert.Equal(t, "CPU usage high", extractSummary(body, "sns"))
+}
+
+func TestExtractSummary_Discord(t *testing.T) {
+	body := []byte(`{"content":"discord hello"}`)
+	assert.Equal(t, "discord hello", extractSummary(body, "discord"))
+}
+
+func TestExtractSummary_Slack(t *testing.T) {
+	body := []byte(`{"text":"slack hello"}`)
+	assert.Equal(t, "slack hello", extractSummary(body, "slack"))
+}
+
 func TestExtractSummary_InvalidJSON(t *testing.T) {
 	assert.Equal(t, "(非 JSON 内容)", extractSummary([]byte(`not json`), "wecom"))
 }
@@ -326,10 +417,9 @@ func TestTruncate(t *testing.T) {
 }
 
 func TestIsValidPlatform(t *testing.T) {
-	assert.True(t, isValidPlatform("wecom"))
-	assert.True(t, isValidPlatform("dingtalk"))
-	assert.True(t, isValidPlatform("feishu"))
-	assert.True(t, isValidPlatform("custom"))
+	for _, pf := range []string{"wecom", "dingtalk", "feishu", "telegram", "email", "sns", "aliyun-sms", "tencent-sms", "discord", "slack", "custom"} {
+		assert.True(t, isValidPlatform(pf), "platform should be valid: %s", pf)
+	}
 	assert.False(t, isValidPlatform("invalid"))
 	assert.False(t, isValidPlatform(""))
 }
@@ -354,13 +444,17 @@ func TestGetDisplay(t *testing.T) {
 		config: &Config{
 			Targets: []TargetConfig{
 				{Name: "ops-alert", Platform: "wecom", WebhookURL: "https://qyapi.weixin.qq.com/1", Enabled: true},
-				{Name: "dev-notify", Platform: "wecom", WebhookURL: "https://qyapi.weixin.qq.com/2", Enabled: true},
-				{Name: "ops-dingtalk", Platform: "dingtalk", WebhookURL: "https://oapi.dingtalk.com/x", Secret: "SEC", Enabled: true},
-				{Name: "disabled-target", Platform: "feishu", WebhookURL: "https://feishu.cn/x", Enabled: false},
+				{Name: "tg-alerts", Platform: "telegram", WebhookURL: "https://api.telegram.org/botX/sendMessage", Secret: "TOKEN", Enabled: true},
+				{Name: "slack-alerts", Platform: "slack", WebhookURL: "https://hooks.slack.com/services/x", Enabled: true},
+				{Name: "smtp-alerts", Platform: "email", WebhookURL: "smtp://user:pass@smtp.example.com:587", Enabled: false},
 			},
 			Incoming: IncomingConfig{
-				Enabled:   true,
-				Platforms: map[string]PlatformReceiveConfig{"wecom": {Enabled: true}},
+				Enabled: true,
+				Platforms: map[string]PlatformReceiveConfig{
+					"wecom":    {Enabled: true},
+					"telegram": {Enabled: true, Secret: "TG_SECRET"},
+					"slack":    {Enabled: true, Secret: "SLACK_SECRET"},
+				},
 			},
 			HTML2MD: HTML2MDConfig{
 				Enabled: true,
@@ -369,10 +463,15 @@ func TestGetDisplay(t *testing.T) {
 	}
 
 	display := p.GetDisplay(nil)
-	assert.Contains(t, display, "透明代理")
-	assert.Contains(t, display, "ops-alert")
-	assert.Contains(t, display, "dev-notify")
-	assert.Contains(t, display, "ops-dingtalk")
+	assert.Contains(t, display, "Telegram")
+	assert.Contains(t, display, "Slack")
+	assert.Contains(t, display, "Email")
+	assert.Contains(t, display, "Amazon SNS")
+	assert.Contains(t, display, "SMTP / SMTPS")
+	assert.Contains(t, display, "Webhook 型")
+	assert.Contains(t, display, "专用发送型")
+	assert.Contains(t, display, "tg-alerts")
+	assert.Contains(t, display, "slack-alerts")
 	assert.Contains(t, display, "🔑")
 	assert.Contains(t, display, "Name 命名规则")
 	assert.Contains(t, display, "HTML")
@@ -481,6 +580,6 @@ func TestIsHTML_False(t *testing.T) {
 	assert.False(t, IsHTML("### Markdown 标题"))
 	assert.False(t, IsHTML("**加粗** 和 *斜体*"))
 	assert.False(t, IsHTML(""))
-	assert.False(t, IsHTML("a < b > c")) // 数学比较，不是 HTML
+	assert.False(t, IsHTML("a < b > c"))
 	assert.False(t, IsHTML("温度 < 30度"))
 }

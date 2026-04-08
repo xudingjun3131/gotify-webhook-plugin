@@ -24,7 +24,7 @@ func GetGotifyPluginInfo() plugin.Info {
 		Version:     "1.0.0",
 		Author:      "Gotify Webhook Plugin",
 		Website:     "https://github.com/gotify/gotify-webhook-plugin",
-		Description: "透明代理 Webhook 插件：原样转发消息到企业微信、钉钉、飞书或自定义 Webhook",
+		Description: "透明代理通知插件：支持企业微信、钉钉、飞书、Telegram、Discord、Slack，以及 Email / Amazon SNS / 阿里云短信 / 腾讯云短信 / 自定义通知",
 		License:     "MIT",
 		Name:        "Webhook Forwarder",
 	}
@@ -69,24 +69,14 @@ func (p *WebhookPlugin) SetStorageHandler(h plugin.StorageHandler) {
 // DefaultConfig implements plugin.Configurer.
 func (p *WebhookPlugin) DefaultConfig() interface{} {
 	return &Config{
-		// ===== 出站目标（透明代理转发） =====
+		// ===== 出站目标（透明代理转发 / 专用发送器） =====
 		// 每个平台可配置多个目标，通过 name 区分
 		// 出站 URL: POST /send/<platform>/<name>
-		// 示例: POST /send/wecom/wecom-ops   → 转发到企微运维群
-		//       POST /send/wecom/wecom-dev   → 转发到企微开发群
-		//       POST /send/dingtalk/dt-ops   → 转发到钉钉运维群
-		//       POST /send/wecom            → 广播到所有已启用的企微目标
 		Targets: []TargetConfig{
 			{
 				Name:       "wecom-ops",
 				Platform:   "wecom",
 				WebhookURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY_1",
-				Enabled:    false,
-			},
-			{
-				Name:       "wecom-dev",
-				Platform:   "wecom",
-				WebhookURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY_2",
 				Enabled:    false,
 			},
 			{
@@ -104,6 +94,65 @@ func (p *WebhookPlugin) DefaultConfig() interface{} {
 				Enabled:    false,
 			},
 			{
+				Name:       "tg-alerts",
+				Platform:   "telegram",
+				WebhookURL: "https://api.telegram.org/bot<token>/sendMessage",
+				Secret:     "YOUR_TELEGRAM_WEBHOOK_SECRET",
+				Enabled:    false,
+			},
+			{
+				Name:         "smtp-alerts",
+				Platform:     "email",
+				WebhookURL:   "smtp://user:password@smtp.example.com:587",
+				EmailFrom:    "gotify@example.com",
+				EmailTo:      []string{"ops@example.com"},
+				EmailSubject: "Gotify Alert",
+				Enabled:      false,
+			},
+			{
+				Name:       "aws-sns-topic",
+				Platform:   "sns",
+				TopicARN:   "arn:aws:sns:ap-southeast-1:123456789012:alerts",
+				Region:     "ap-southeast-1",
+				Subject:    "Gotify Alert",
+				Enabled:    false,
+			},
+			{
+				Name:         "aliyun-sms-alerts",
+				Platform:     "aliyun-sms",
+				Secret:       "ACCESS_KEY_ID:ACCESS_KEY_SECRET",
+				PhoneNumbers: []string{"13800138000"},
+				TemplateCode: "SMS_123456789",
+				SignName:     "YourSign",
+				Region:       "cn-hangzhou",
+				Enabled:      false,
+			},
+			{
+				Name:         "tencent-sms-alerts",
+				Platform:     "tencent-sms",
+				Secret:       "SECRET_ID:SECRET_KEY",
+				SMSAppID:     "1400006666",
+				PhoneNumbers: []string{"+8613800138000"},
+				TemplateCode: "1234567",
+				SignName:     "YourSign",
+				Region:       "ap-guangzhou",
+				Enabled:      false,
+			},
+			{
+				Name:       "discord-alerts",
+				Platform:   "discord",
+				WebhookURL: "https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN",
+				Secret:     "YOUR_DISCORD_WEBHOOK_SECRET",
+				Enabled:    false,
+			},
+			{
+				Name:       "slack-alerts",
+				Platform:   "slack",
+				WebhookURL: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
+				Secret:     "YOUR_SLACK_WEBHOOK_SECRET",
+				Enabled:    false,
+			},
+			{
 				Name:       "my-custom",
 				Platform:   "custom",
 				WebhookURL: "https://example.com/webhook",
@@ -116,30 +165,24 @@ func (p *WebhookPlugin) DefaultConfig() interface{} {
 		// ===== 入站接收（外部 → Gotify） =====
 		// 接收外部平台原生格式的消息，解析后存为 Gotify 消息
 		// 入站 URL: POST /receive?platform=<platform>&token=<secret>
-		// 示例:
-		//   企业微信: POST /receive?platform=wecom&token=YOUR_WECOM_TOKEN
-		//     Body: {"msgtype":"text","text":{"content":"来自企微的消息"}}
-		//   钉钉:    POST /receive?platform=dingtalk
-		//     Body: {"msgtype":"text","text":{"content":"来自钉钉的消息"}}
-		//     (钉钉使用 URL 参数 timestamp+sign 验签，无需 token)
-		//   飞书:    POST /receive?platform=feishu
-		//     Body: {"msg_type":"text","content":{"text":"来自飞书的消息"},"timestamp":"...","sign":"..."}
-		//     (飞书签名在 body 中，无需 token)
-		//   自定义:  POST /receive?platform=custom&token=YOUR_CUSTOM_TOKEN
-		//     Body: {"title":"标题","message":"内容","priority":5}
 		Incoming: IncomingConfig{
 			Enabled: true,
 			Secret:  "",
 			Platforms: map[string]PlatformReceiveConfig{
-				"wecom":    {Enabled: true, Secret: "YOUR_WECOM_RECEIVE_TOKEN"},
-				"dingtalk": {Enabled: true, Secret: "YOUR_DINGTALK_RECEIVE_SECRET"},
-				"feishu":   {Enabled: true, Secret: "YOUR_FEISHU_RECEIVE_SECRET"},
-				"custom":   {Enabled: true, Secret: "YOUR_CUSTOM_RECEIVE_TOKEN"},
+				"wecom":       {Enabled: true, Secret: "YOUR_WECOM_RECEIVE_TOKEN"},
+				"dingtalk":    {Enabled: true, Secret: "YOUR_DINGTALK_RECEIVE_SECRET"},
+				"feishu":      {Enabled: true, Secret: "YOUR_FEISHU_RECEIVE_SECRET"},
+				"telegram":    {Enabled: true, Secret: "YOUR_TELEGRAM_WEBHOOK_SECRET"},
+				"email":       {Enabled: true, Secret: "YOUR_EMAIL_RECEIVE_TOKEN"},
+				"sns":         {Enabled: true, Secret: "YOUR_SNS_RECEIVE_TOKEN"},
+				"aliyun-sms":  {Enabled: true, Secret: "YOUR_ALIYUN_SMS_RECEIVE_TOKEN"},
+				"tencent-sms": {Enabled: true, Secret: "YOUR_TENCENT_SMS_RECEIVE_TOKEN"},
+				"discord":     {Enabled: true, Secret: "YOUR_DISCORD_WEBHOOK_SECRET"},
+				"slack":       {Enabled: true, Secret: "YOUR_SLACK_WEBHOOK_SECRET"},
+				"custom":      {Enabled: true, Secret: "YOUR_CUSTOM_RECEIVE_TOKEN"},
 			},
 		},
 		// ===== HTML → Markdown 自动转换 =====
-		// 当入站消息（企微/钉钉/飞书/自定义）包含 HTML 内容时，
-		// 自动检测并转为 Markdown，利用 Gotify 前端原生渲染
 		HTML2MD: HTML2MDConfig{
 			Enabled: true,
 		},
@@ -163,8 +206,10 @@ func (p *WebhookPlugin) ValidateAndSetConfig(c interface{}) error {
 		if !namePattern.MatchString(target.Name) {
 			return fmt.Errorf("target #%d: name '%s' is invalid, only alphanumeric, hyphen, underscore, dot allowed", i+1, target.Name)
 		}
-		if target.WebhookURL == "" {
-			return fmt.Errorf("target %s: webhook_url is required", target.Name)
+		if target.WebhookURL == "" && target.Platform != "sns" && target.Platform != "aliyun-sms" {
+			if target.Platform != "tencent-sms" || target.SMSAppID == "" {
+				return fmt.Errorf("target %s: webhook_url is required", target.Name)
+			}
 		}
 		validPlatform := false
 		for _, p := range ValidPlatforms {
@@ -225,13 +270,6 @@ func (p *WebhookPlugin) RegisterWebhook(basePath string, g *gin.RouterGroup) {
 	})
 
 	// ===== 出站转发（精确路由到指定目标） =====
-	// POST /send/<platform>/<name> — 发送到指定平台的指定目标
-	// 请求体格式与目标平台的 webhook 接口要求完全一致（透明代理）
-	//
-	// 示例:
-	//   POST /send/wecom/wecom-group1     → 发送到名为 "wecom-group1" 的企微目标
-	//   POST /send/dingtalk/ops-alert     → 发送到名为 "ops-alert" 的钉钉目标
-	//   POST /send/feishu/dev-notify      → 发送到名为 "dev-notify" 的飞书目标
 	g.POST("/send/:platform/:name", func(c *gin.Context) {
 		if !p.enabled {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "plugin is disabled"})
@@ -241,7 +279,6 @@ func (p *WebhookPlugin) RegisterWebhook(basePath string, g *gin.RouterGroup) {
 		platform := c.Param("platform")
 		name := c.Param("name")
 
-		// 验证平台
 		if !isValidPlatform(platform) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": fmt.Sprintf("unsupported platform '%s', supported: %s", platform, strings.Join(ValidPlatforms, "/")),
@@ -249,7 +286,6 @@ func (p *WebhookPlugin) RegisterWebhook(basePath string, g *gin.RouterGroup) {
 			return
 		}
 
-		// 查找目标
 		target := p.findTarget(platform, name)
 		if target == nil {
 			c.JSON(http.StatusNotFound, gin.H{
@@ -264,7 +300,6 @@ func (p *WebhookPlugin) RegisterWebhook(basePath string, g *gin.RouterGroup) {
 			return
 		}
 
-		// 读取原始请求体 — 原样转发
 		rawBody, err := io.ReadAll(c.Request.Body)
 		if err != nil || len(rawBody) == 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "empty request body"})
@@ -284,7 +319,6 @@ func (p *WebhookPlugin) RegisterWebhook(basePath string, g *gin.RouterGroup) {
 
 		log.Printf("[webhook-plugin] Forwarded to %s/%s", platform, name)
 
-		// Gotify 中记录
 		if p.msgHandler != nil {
 			summary := extractSummary(rawBody, platform)
 			_ = p.msgHandler.SendMessage(plugin.Message{
@@ -298,7 +332,6 @@ func (p *WebhookPlugin) RegisterWebhook(basePath string, g *gin.RouterGroup) {
 	})
 
 	// ===== 出站转发（广播到平台所有已启用目标） =====
-	// POST /send/<platform> — 发送到该平台的所有已启用目标
 	g.POST("/send/:platform", func(c *gin.Context) {
 		if !p.enabled {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "plugin is disabled"})
@@ -379,7 +412,7 @@ func (p *WebhookPlugin) RegisterWebhook(basePath string, g *gin.RouterGroup) {
 
 		platform := c.Query("platform")
 		if platform == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "platform parameter is required (wecom/dingtalk/feishu/custom)"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("platform parameter is required (%s)", strings.Join(ValidPlatforms, "/"))})
 			return
 		}
 
@@ -396,7 +429,7 @@ func (p *WebhookPlugin) RegisterWebhook(basePath string, g *gin.RouterGroup) {
 
 		token := c.Query("token")
 		if secret != "" && platform != "dingtalk" && platform != "feishu" {
-			if token != secret {
+			if token != secret && c.GetHeader("X-Webhook-Token") != secret {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or missing token"})
 				return
 			}
@@ -408,19 +441,16 @@ func (p *WebhookPlugin) RegisterWebhook(basePath string, g *gin.RouterGroup) {
 			return
 		}
 
-		// 仅当消息类型为 markdown 且启用了 HTML→Markdown 时，检测并转换 HTML
 		var extras map[string]interface{}
 		if isMarkdown && p.config.HTML2MD.Enabled && IsHTML(message) {
 			md, convErr := ConvertHTMLToMarkdown(message)
 			if convErr != nil {
 				log.Printf("[webhook-plugin] HTML→Markdown auto-conversion failed for %s: %v", platform, convErr)
-				// 转换失败时保持原始内容
 			} else {
 				message = md
 				log.Printf("[webhook-plugin] Auto-converted HTML→Markdown for %s message", platform)
 			}
 		}
-		// markdown 类型的消息始终注入 extras 以触发 Gotify 前端 Markdown 渲染
 		if isMarkdown {
 			extras = map[string]interface{}{
 				"client::display": map[string]interface{}{
@@ -443,10 +473,7 @@ func (p *WebhookPlugin) RegisterWebhook(basePath string, g *gin.RouterGroup) {
 		c.JSON(http.StatusOK, gin.H{"status": "message created", "platform": platform})
 	})
 
-
 	// ===== 出站测试 =====
-	// POST /test          — 测试所有已启用目标
-	// POST /test/<name>   — 测试指定名称的目标
 	g.POST("/test", func(c *gin.Context) {
 		if !p.enabled {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "plugin is disabled"})
@@ -517,52 +544,70 @@ func (p *WebhookPlugin) GetDisplay(location *url.URL) string {
 		baseURL = fmt.Sprintf("%s://%s%s", location.Scheme, location.Host, base)
 	}
 
-	var sb strings.Builder
-	sb.WriteString("## Gotify Webhook 透明代理插件\n\n")
+	platformNames := map[string]string{
+		"wecom":       "企业微信",
+		"dingtalk":    "钉钉",
+		"feishu":      "飞书",
+		"telegram":    "Telegram",
+		"email":       "Email",
+		"sns":         "Amazon SNS",
+		"aliyun-sms":  "阿里云短信",
+		"tencent-sms": "腾讯云短信",
+		"discord":     "Discord",
+		"slack":       "Slack",
+		"custom":      "自定义",
+	}
+	platformKinds := map[string]string{
+		"wecom":       "Webhook",
+		"dingtalk":    "Webhook + 自动签名",
+		"feishu":      "Webhook + 自动签名",
+		"telegram":    "Bot API / Webhook",
+		"email":       "SMTP / SMTPS",
+		"sns":         "AWS SDK",
+		"aliyun-sms":  "阿里云短信 SDK",
+		"tencent-sms": "腾讯云短信 SDK",
+		"discord":     "Webhook",
+		"slack":       "Webhook",
+		"custom":      "自定义 HTTP",
+	}
 
-	sb.WriteString("### 💡 核心设计\n")
-	sb.WriteString("本插件是一个 **透明代理**，接收与目标平台 webhook API **完全一致的原生 JSON 格式**，")
-	sb.WriteString("仅在需要时自动添加签名，然后 **原样转发** 到目标平台。\n\n")
-	sb.WriteString("> 每个平台支持配置多个目标，通过 URL 中的 **name** 参数精确路由。\n\n")
+	var sb strings.Builder
+	sb.WriteString("## Gotify 多通道路由插件\n\n")
+	sb.WriteString("支持 **透明代理 Webhook** 与 **专用发送器** 两类模式：\n\n")
+	sb.WriteString("- Webhook 型：企业微信、钉钉、飞书、Telegram、Discord、Slack、自定义\n")
+	sb.WriteString("- 专用发送型：Email、Amazon SNS、阿里云短信、腾讯云短信\n\n")
 
 	sb.WriteString("### 路由规则\n")
 	sb.WriteString("| 路由 | 说明 |\n")
 	sb.WriteString("|------|------|\n")
 	sb.WriteString("| `POST /send/<platform>/<name>` | 发送到指定平台的指定目标 |\n")
 	sb.WriteString("| `POST /send/<platform>` | 广播到该平台的所有已启用目标 |\n")
+	sb.WriteString("| `POST /receive?platform=<platform>` | 接收入站通知并写入 Gotify |\n")
 	sb.WriteString("| `POST /test` | 测试所有已启用目标 |\n")
-	sb.WriteString("| `POST /test/<name>` | 测试指定名称的目标 |\n\n")
+	sb.WriteString("| `POST /test/<name>` | 测试指定目标 |\n\n")
 
 	sb.WriteString("### 支持平台\n")
-	sb.WriteString("| 平台 | platform 参数 | 签名方式 |\n")
-	sb.WriteString("|------|---------------|----------|\n")
-	sb.WriteString("| 企业微信 | `wecom` | 无需签名 |\n")
-	sb.WriteString("| 钉钉 | `dingtalk` | HMAC-SHA256 加签（自动添加） |\n")
-	sb.WriteString("| 飞书 | `feishu` | HMAC-SHA256 签名（自动注入 body） |\n")
-	sb.WriteString("| 自定义 | `custom` | X-Signature header（可选） |\n\n")
+	sb.WriteString("| 平台 | platform 参数 | 类型 |\n")
+	sb.WriteString("|------|---------------|------|\n")
+	for _, pf := range ValidPlatforms {
+		sb.WriteString(fmt.Sprintf("| %s | `%s` | %s |\n", platformNames[pf], pf, platformKinds[pf]))
+	}
+	sb.WriteString("\n")
 
 	if baseURL != "" {
 		sb.WriteString("### API 端点\n")
-		sb.WriteString(fmt.Sprintf("| 功能 | 方法 | 地址 |\n"))
-		sb.WriteString(fmt.Sprintf("|------|------|------|\n"))
+		sb.WriteString("| 功能 | 方法 | 地址 |\n")
+		sb.WriteString("|------|------|------|\n")
 		sb.WriteString(fmt.Sprintf("| 健康检查 | GET | `%s/health` |\n", baseURL))
 		sb.WriteString(fmt.Sprintf("| 测试全部 | POST | `%s/test` |\n", baseURL))
 		sb.WriteString(fmt.Sprintf("| 入站接收 | POST | `%s/receive?platform=<p>` |\n\n", baseURL))
 	}
 
-	// 显示出站目标，按平台分组
 	sb.WriteString("### 出站目标\n")
 	if p.config != nil {
 		platforms := map[string][]TargetConfig{}
 		for _, t := range p.config.Targets {
 			platforms[t.Platform] = append(platforms[t.Platform], t)
-		}
-
-		platformNames := map[string]string{
-			"wecom":    "企业微信",
-			"dingtalk": "钉钉",
-			"feishu":   "飞书",
-			"custom":   "自定义",
 		}
 
 		for _, pf := range ValidPlatforms {
@@ -591,50 +636,45 @@ func (p *WebhookPlugin) GetDisplay(location *url.URL) string {
 
 	if baseURL != "" {
 		sb.WriteString("\n### 调用示例\n\n")
-
-		sb.WriteString("**发送到指定企微目标：**\n")
-		exampleName := "wecom-group1"
-		if p.config != nil {
-			for _, t := range p.config.Targets {
-				if t.Platform == "wecom" {
-					exampleName = t.Name
-					break
-				}
-			}
-		}
-		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/send/wecom/%s' \\\n", baseURL, exampleName))
+		sb.WriteString("**Telegram Bot 发送：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/send/telegram/tg-alerts' \\\n", baseURL))
 		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
-		sb.WriteString("  -d '{\"msgtype\":\"text\",\"text\":{\"content\":\"来自 Gotify 的消息\"}}'\n```\n\n")
+		sb.WriteString("  -d '{\"chat_id\":\"123456789\",\"text\":\"来自 Gotify 的 Telegram 消息\"}'\n```\n\n")
 
-		sb.WriteString("**广播到所有钉钉目标：**\n")
-		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/send/dingtalk' \\\n", baseURL))
+		sb.WriteString("**Slack Webhook 发送：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/send/slack/slack-alerts' \\\n", baseURL))
 		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
-		sb.WriteString("  -d '{\"msgtype\":\"text\",\"text\":{\"content\":\"广播消息\"}}'\n```\n\n")
+		sb.WriteString("  -d '{\"text\":\"来自 Gotify 的 Slack 消息\"}'\n```\n\n")
 
-		sb.WriteString("**飞书（签名自动注入）：**\n")
-		exampleFeishu := "feishu-group1"
-		if p.config != nil {
-			for _, t := range p.config.Targets {
-				if t.Platform == "feishu" {
-					exampleFeishu = t.Name
-					break
-				}
-			}
-		}
-		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/send/feishu/%s' \\\n", baseURL, exampleFeishu))
+		sb.WriteString("**Discord Webhook 发送：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/send/discord/discord-alerts' \\\n", baseURL))
 		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
-		sb.WriteString("  -d '{\"msg_type\":\"text\",\"content\":{\"text\":\"来自 Gotify 的消息\"}}'\n```\n\n")
+		sb.WriteString("  -d '{\"content\":\"来自 Gotify 的 Discord 消息\"}'\n```\n\n")
+
+		sb.WriteString("**Email 发送：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/send/email/smtp-alerts' \\\n", baseURL))
+		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
+		sb.WriteString("  -d '{\"title\":\"数据库告警\",\"message\":\"主库延迟超过阈值\"}'\n```\n\n")
+
+		sb.WriteString("**Amazon SNS 发送：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/send/sns/aws-sns-topic' \\\n", baseURL))
+		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
+		sb.WriteString("  -d '{\"subject\":\"Gotify Alert\",\"message\":\"Amazon SNS 推送测试\"}'\n```\n\n")
 	}
 
 	sb.WriteString("### 入站接收（外部平台 → Gotify）\n")
-	sb.WriteString("接收来自外部平台的 Webhook 消息，解析后存为 Gotify 消息。\n\n")
+	sb.WriteString("接收来自外部平台或第三方系统的通知，解析后保存为 Gotify 消息。\n\n")
 	if p.config != nil {
 		inStatus := "❌ 禁用"
 		if p.config.Incoming.Enabled {
 			inStatus = "✅ 启用"
 		}
 		sb.WriteString(fmt.Sprintf("- 全局状态: %s\n", inStatus))
-		for name, pcfg := range p.config.Incoming.Platforms {
+		for _, pf := range ValidPlatforms {
+			pcfg, ok := p.config.Incoming.Platforms[pf]
+			if !ok {
+				continue
+			}
 			ps := "❌"
 			if pcfg.Enabled {
 				ps = "✅"
@@ -643,66 +683,39 @@ func (p *WebhookPlugin) GetDisplay(location *url.URL) string {
 			if pcfg.Secret != "" {
 				hasSecret = "已配置密钥"
 			}
-			sb.WriteString(fmt.Sprintf("- %s **%s** (%s)\n", ps, name, hasSecret))
+			sb.WriteString(fmt.Sprintf("- %s **%s** / `%s` (%s)\n", ps, platformNames[pf], pf, hasSecret))
 		}
 	}
 
 	if baseURL != "" {
 		sb.WriteString("\n### 入站接收示例\n\n")
-
-		sb.WriteString("**企业微信 Text → Gotify（token 校验）：**\n")
-		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=wecom&token=YOUR_TOKEN' \\\n", baseURL))
+		sb.WriteString("**Telegram Webhook → Gotify：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=telegram' \\\n", baseURL))
 		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
-		sb.WriteString("  -d '{\"msgtype\":\"text\",\"text\":{\"content\":\"来自企微的消息\"}}'\n```\n\n")
+		sb.WriteString("  -H 'X-Telegram-Bot-Api-Secret-Token: YOUR_TELEGRAM_WEBHOOK_SECRET' \\\n")
+		sb.WriteString("  -d '{\"message\":{\"text\":\"来自 Telegram 的消息\",\"chat\":{\"title\":\"报警群\"}}}'\n```\n\n")
 
-		sb.WriteString("**企业微信 Markdown → Gotify：**\n")
-		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=wecom&token=YOUR_TOKEN' \\\n", baseURL))
+		sb.WriteString("**Email Webhook → Gotify：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=email&token=YOUR_EMAIL_RECEIVE_TOKEN' \\\n", baseURL))
 		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
-		sb.WriteString("  -d '{\"msgtype\":\"markdown\",\"markdown\":{\"content\":\"### 告警\\n> CPU 超过 90%%\"}}'\n```\n\n")
+		sb.WriteString("  -d '{\"from\":\"noreply@example.com\",\"subject\":\"巡检报告\",\"text\":\"巡检通过\"}'\n```\n\n")
 
-		sb.WriteString("**钉钉 Text → Gotify：**\n")
-		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=dingtalk' \\\n", baseURL))
+		sb.WriteString("**Amazon SNS → Gotify：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=sns&token=YOUR_SNS_RECEIVE_TOKEN' \\\n", baseURL))
 		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
-		sb.WriteString("  -d '{\"msgtype\":\"text\",\"text\":{\"content\":\"来自钉钉的消息\"}}'\n```\n\n")
+		sb.WriteString("  -d '{\"Type\":\"Notification\",\"Subject\":\"Cloud Alarm\",\"Message\":\"CPU usage high\",\"TopicArn\":\"arn:aws:sns:...\"}'\n```\n\n")
 
-		sb.WriteString("**钉钉 Markdown → Gotify：**\n")
-		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=dingtalk' \\\n", baseURL))
+		sb.WriteString("**Slack Webhook → Gotify：**\n")
+		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=slack&token=YOUR_SLACK_WEBHOOK_SECRET' \\\n", baseURL))
 		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
-		sb.WriteString("  -d '{\"msgtype\":\"markdown\",\"markdown\":{\"title\":\"监控告警\",\"text\":\"### CPU 告警\\n使用率超过 **90%%**\"}}'\n```\n\n")
-
-		sb.WriteString("**飞书 Text → Gotify：**\n")
-		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=feishu' \\\n", baseURL))
-		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
-		sb.WriteString("  -d '{\"msg_type\":\"text\",\"content\":{\"text\":\"来自飞书的消息\"}}'\n```\n\n")
-
-		sb.WriteString("**飞书 Markdown → Gotify：**\n")
-		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=feishu' \\\n", baseURL))
-		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
-		sb.WriteString("  -d '{\"msg_type\":\"markdown\",\"content\":{\"text\":\"### 告警\\n> CPU 超过 90%%\"}}'\n```\n\n")
-
-		sb.WriteString("**自定义 Text → Gotify（token 校验）：**\n")
-		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=custom&token=YOUR_TOKEN' \\\n", baseURL))
-		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
-		sb.WriteString("  -d '{\"title\":\"告警标题\",\"message\":\"告警详情内容\",\"priority\":5}'\n```\n\n")
-
-		sb.WriteString("**自定义 Markdown → Gotify（含 HTML 自动转换）：**\n")
-		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=custom&token=YOUR_TOKEN' \\\n", baseURL))
-		sb.WriteString("  -H 'Content-Type: application/json' \\\n")
-		sb.WriteString("  -d '{\"msgtype\":\"markdown\",\"title\":\"监控告警\",\"message\":\"<h1>CPU 告警</h1><p>使用率 <b>99%%</b></p>\",\"priority\":5}'\n```\n\n")
-
-		sb.WriteString("**自定义 — 纯 HTML Body：**\n")
-		sb.WriteString(fmt.Sprintf("```bash\ncurl -X POST '%s/receive?platform=custom&token=YOUR_TOKEN' \\\n", baseURL))
-		sb.WriteString("  -H 'Content-Type: text/html' \\\n")
-		sb.WriteString("  -d '<h1>告警</h1><p>CPU 使用率 <b>99%%</b></p>'\n```\n\n")
+		sb.WriteString("  -d '{\"text\":\"来自 Slack 的消息\",\"channel_name\":\"alerts\",\"username\":\"bot\"}'\n```\n\n")
 	}
 
 	sb.WriteString("### Name 命名规则\n")
 	sb.WriteString("Target name 必须是 URL 安全的字符串，只允许：`a-z A-Z 0-9 _ - .`\n\n")
 
-	// HTML → Markdown 功能说明
 	sb.WriteString("### HTML → Markdown 自动转换\n")
-	sb.WriteString("**仅当 `msgtype` 为 `markdown` 时**，插件才检测消息中的 HTML 标签并自动转为 Markdown。\n")
-	sb.WriteString("`text` 格式的消息不做任何转换。\n\n")
+	sb.WriteString("当入站消息被识别为 Markdown 且内容实际包含 HTML 标签时，插件会自动转为 Markdown，并写入 Gotify 的 Markdown display extras。\n\n")
 	if p.config != nil {
 		html2mdStatus := "❌ 禁用"
 		if p.config.HTML2MD.Enabled {
@@ -710,14 +723,6 @@ func (p *WebhookPlugin) GetDisplay(location *url.URL) string {
 		}
 		sb.WriteString(fmt.Sprintf("- 状态: %s\n", html2mdStatus))
 	}
-
-	sb.WriteString("\n**工作原理：**\n")
-	sb.WriteString("1. 通过 `/receive` 入站通道（企微/钉钉/飞书/自定义）接收消息\n")
-	sb.WriteString("2. 当 `msgtype/msg_type = markdown` 时，检测内容中的 HTML 标签\n")
-	sb.WriteString("3. 将 HTML 转换为 Markdown，写入 `content` 字段\n")
-	sb.WriteString("4. 自动注入 `extras.client::display.contentType = text/markdown`\n")
-	sb.WriteString("5. Gotify 前端使用内置 Markdown 渲染器展示\n\n")
-
 
 	return sb.String()
 }
@@ -756,6 +761,33 @@ func buildNativeTestPayload(platform string) []byte {
 			"content": map[string]string{
 				"text": "🔔 Gotify Webhook Plugin 测试消息 — 飞书通道",
 			},
+		}
+	case "telegram":
+		payload = map[string]interface{}{
+			"chat_id": "123456789",
+			"text":    "🔔 Gotify Webhook Plugin 测试消息 — Telegram 通道",
+		}
+	case "email":
+		payload = map[string]interface{}{
+			"title":   "Gotify Test",
+			"message": "🔔 Gotify Webhook Plugin 测试消息 — Email 通道",
+		}
+	case "sns":
+		payload = map[string]interface{}{
+			"subject": "Gotify Test",
+			"message": "🔔 Gotify Webhook Plugin 测试消息 — Amazon SNS 通道",
+		}
+	case "aliyun-sms", "tencent-sms":
+		payload = map[string]interface{}{
+			"message": "【Gotify】测试消息：短信通道可达",
+		}
+	case "discord":
+		payload = map[string]interface{}{
+			"content": "🔔 Gotify Webhook Plugin 测试消息 — Discord 通道",
+		}
+	case "slack":
+		payload = map[string]interface{}{
+			"text": "🔔 Gotify Webhook Plugin 测试消息 — Slack 通道",
 		}
 	case "custom":
 		payload = map[string]interface{}{
@@ -823,6 +855,46 @@ func extractSummary(rawBody []byte, platform string) string {
 				}
 			}
 			return fmt.Sprintf("消息类型: %s", msgType)
+		}
+	case "telegram":
+		if text, ok := m["text"].(string); ok {
+			return truncate(text, 100)
+		}
+	case "email":
+		if subject, ok := m["subject"].(string); ok {
+			if message, ok := m["message"].(string); ok {
+				return truncate(subject+": "+message, 100)
+			}
+			if text, ok := m["text"].(string); ok {
+				return truncate(subject+": "+text, 100)
+			}
+			return truncate(subject, 100)
+		}
+	case "sns":
+		if message, ok := m["message"].(string); ok {
+			return truncate(message, 100)
+		}
+		if message, ok := m["Message"].(string); ok {
+			return truncate(message, 100)
+		}
+	case "aliyun-sms", "tencent-sms":
+		if message, ok := m["message"].(string); ok {
+			return truncate(message, 100)
+		}
+		if content, ok := m["content"].(string); ok {
+			return truncate(content, 100)
+		}
+	case "discord":
+		if content, ok := m["content"].(string); ok {
+			return truncate(content, 100)
+		}
+	case "slack":
+		if text, ok := m["text"].(string); ok {
+			return truncate(text, 100)
+		}
+	case "custom":
+		if message, ok := m["message"].(string); ok {
+			return truncate(message, 100)
 		}
 	}
 

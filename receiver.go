@@ -33,16 +33,28 @@ func (r *Receiver) ParseAndVerify(c *gin.Context, platform, secret string) (titl
 		return r.parseDingTalk(c, secret)
 	case "feishu":
 		return r.parseFeishu(c, secret)
+	case "telegram":
+		return r.parseTelegram(c, secret)
+	case "email":
+		return r.parseEmail(c, secret)
+	case "sns":
+		return r.parseSNS(c, secret)
+	case "aliyun-sms":
+		return r.parseAliyunSMS(c, secret)
+	case "tencent-sms":
+		return r.parseTencentSMS(c, secret)
+	case "discord":
+		return r.parseDiscord(c, secret)
+	case "slack":
+		return r.parseSlack(c, secret)
 	case "custom":
 		return r.parseCustom(c, secret)
 	default:
-		return "", "", 0, false, fmt.Errorf("unsupported platform: %s, supported: wecom/dingtalk/feishu/custom", platform)
+		return "", "", 0, false, fmt.Errorf("unsupported platform: %s", platform)
 	}
 }
 
 // --- WeCom (企业微信) Incoming ---
-// 企业微信 webhook 回调不带签名，消息格式为 JSON
-// 支持 text 和 markdown 两种消息类型
 func (r *Receiver) parseWeCom(c *gin.Context) (string, string, int, bool, error) {
 	var body struct {
 		MsgType string `json:"msgtype"`
@@ -72,11 +84,7 @@ func (r *Receiver) parseWeCom(c *gin.Context) (string, string, int, bool, error)
 }
 
 // --- DingTalk (钉钉) Incoming ---
-// 钉钉签名验证: timestamp + "\n" + secret → HMAC-SHA256 → Base64
-// 签名通过 URL 参数 timestamp 和 sign 传入
-// 支持 text 和 markdown 两种消息类型
 func (r *Receiver) parseDingTalk(c *gin.Context, secret string) (string, string, int, bool, error) {
-	// 验证签名
 	if secret != "" {
 		timestamp := c.Query("timestamp")
 		sign := c.Query("sign")
@@ -130,9 +138,6 @@ func (r *Receiver) parseDingTalk(c *gin.Context, secret string) (string, string,
 }
 
 // --- Feishu (飞书) Incoming ---
-// 飞书签名验证: timestamp + "\n" + secret → HMAC-SHA256 → Base64
-// 签名通过 JSON body 中的 timestamp 和 sign 字段传入
-// 支持 text 和 markdown 两种消息类型（msg_type: text / post）
 func (r *Receiver) parseFeishu(c *gin.Context, secret string) (string, string, int, bool, error) {
 	rawBody, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -159,7 +164,6 @@ func (r *Receiver) parseFeishu(c *gin.Context, secret string) (string, string, i
 		return "", "", 0, false, fmt.Errorf("invalid feishu message format: %w", err)
 	}
 
-	// 验证签名
 	if secret != "" {
 		if fullBody.Timestamp == "" || fullBody.Sign == "" {
 			return "", "", 0, false, fmt.Errorf("feishu signature required: missing timestamp or sign in body")
@@ -173,7 +177,6 @@ func (r *Receiver) parseFeishu(c *gin.Context, secret string) (string, string, i
 	case "text":
 		return "飞书消息", fullBody.Content.Text, 5, false, nil
 	case "post", "markdown":
-		// 飞书的 post 类型支持富文本，markdown 作为自定义扩展
 		return "飞书消息", fullBody.Content.Text, 5, true, nil
 	case "interactive":
 		title := fullBody.Card.Header.Title.Content
@@ -189,16 +192,190 @@ func (r *Receiver) parseFeishu(c *gin.Context, secret string) (string, string, i
 	}
 }
 
+func (r *Receiver) parseTelegram(c *gin.Context, secret string) (string, string, int, bool, error) {
+	if err := verifyHeaderSecret(c, secret, "X-Telegram-Bot-Api-Secret-Token", "X-Webhook-Token"); err != nil {
+		return "", "", 0, false, err
+	}
+
+	var body struct {
+		Message *struct {
+			Text string `json:"text"`
+			Chat struct {
+				Title string `json:"title"`
+				Type  string `json:"type"`
+			} `json:"chat"`
+			From struct {
+				Username  string `json:"username"`
+				FirstName string `json:"first_name"`
+			} `json:"from"`
+		} `json:"message"`
+		ChannelPost *struct {
+			Text string `json:"text"`
+			Chat struct {
+				Title string `json:"title"`
+			} `json:"chat"`
+		} `json:"channel_post"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		return "", "", 0, false, fmt.Errorf("invalid telegram update format: %w", err)
+	}
+
+	if body.Message != nil {
+		title := "Telegram 消息"
+		if body.Message.Chat.Title != "" {
+			title = body.Message.Chat.Title
+		} else if body.Message.From.Username != "" {
+			title = "Telegram @" + body.Message.From.Username
+		} else if body.Message.From.FirstName != "" {
+			title = "Telegram " + body.Message.From.FirstName
+		}
+		return title, body.Message.Text, 5, false, nil
+	}
+	if body.ChannelPost != nil {
+		title := "Telegram 频道消息"
+		if body.ChannelPost.Chat.Title != "" {
+			title = body.ChannelPost.Chat.Title
+		}
+		return title, body.ChannelPost.Text, 5, false, nil
+	}
+	return "Telegram 消息", "[未识别的 Telegram Update]", 3, false, nil
+}
+
+func (r *Receiver) parseEmail(c *gin.Context, secret string) (string, string, int, bool, error) {
+	if err := verifyHeaderSecret(c, secret, "X-Webhook-Token", "X-Email-Token"); err != nil {
+		return "", "", 0, false, err
+	}
+	var body struct {
+		Subject string `json:"subject"`
+		Text    string `json:"text"`
+		HTML    string `json:"html"`
+		From    string `json:"from"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		return "", "", 0, false, fmt.Errorf("invalid email payload format: %w", err)
+	}
+	message := body.Text
+	isMarkdown := false
+	if strings.TrimSpace(message) == "" && strings.TrimSpace(body.HTML) != "" {
+		message = body.HTML
+		isMarkdown = true
+	}
+	if body.From != "" {
+		message = fmt.Sprintf("From: %s\n\n%s", body.From, message)
+	}
+	if body.Subject == "" {
+		body.Subject = "Email 消息"
+	}
+	return body.Subject, message, 5, isMarkdown, nil
+}
+
+func (r *Receiver) parseSNS(c *gin.Context, secret string) (string, string, int, bool, error) {
+	if err := verifyHeaderSecret(c, secret, "X-Webhook-Token", "X-SNS-Token"); err != nil {
+		return "", "", 0, false, err
+	}
+	var body struct {
+		Subject string `json:"Subject"`
+		Message string `json:"Message"`
+		Type    string `json:"Type"`
+		Topic   string `json:"TopicArn"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		return "", "", 0, false, fmt.Errorf("invalid sns payload format: %w", err)
+	}
+	if body.Subject == "" {
+		body.Subject = "Amazon SNS 消息"
+	}
+	if body.Topic != "" {
+		body.Message = fmt.Sprintf("Topic: %s\nType: %s\n\n%s", body.Topic, body.Type, body.Message)
+	}
+	return body.Subject, body.Message, 5, false, nil
+}
+
+func (r *Receiver) parseAliyunSMS(c *gin.Context, secret string) (string, string, int, bool, error) {
+	if err := verifyHeaderSecret(c, secret, "X-Webhook-Token", "X-Aliyun-SMS-Token"); err != nil {
+		return "", "", 0, false, err
+	}
+	var body struct {
+		PhoneNumber string `json:"phone_number"`
+		Content     string `json:"content"`
+		Template    string `json:"template_code"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		return "", "", 0, false, fmt.Errorf("invalid aliyun sms payload format: %w", err)
+	}
+	msg := body.Content
+	if body.Template != "" {
+		msg = fmt.Sprintf("Template: %s\nPhone: %s\n\n%s", body.Template, body.PhoneNumber, body.Content)
+	}
+	return "阿里云短信消息", msg, 5, false, nil
+}
+
+func (r *Receiver) parseTencentSMS(c *gin.Context, secret string) (string, string, int, bool, error) {
+	if err := verifyHeaderSecret(c, secret, "X-Webhook-Token", "X-Tencent-SMS-Token"); err != nil {
+		return "", "", 0, false, err
+	}
+	var body struct {
+		PhoneNumber string `json:"phone_number"`
+		Content     string `json:"content"`
+		Template    string `json:"template_id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		return "", "", 0, false, fmt.Errorf("invalid tencent sms payload format: %w", err)
+	}
+	msg := body.Content
+	if body.Template != "" {
+		msg = fmt.Sprintf("Template: %s\nPhone: %s\n\n%s", body.Template, body.PhoneNumber, body.Content)
+	}
+	return "腾讯云短信消息", msg, 5, false, nil
+}
+
+func (r *Receiver) parseDiscord(c *gin.Context, secret string) (string, string, int, bool, error) {
+	if err := verifyHeaderSecret(c, secret, "X-Webhook-Token", "X-Discord-Token"); err != nil {
+		return "", "", 0, false, err
+	}
+	var body struct {
+		Content   string `json:"content"`
+		Username  string `json:"username"`
+		WebhookID string `json:"webhook_id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		return "", "", 0, false, fmt.Errorf("invalid discord payload format: %w", err)
+	}
+	title := "Discord 消息"
+	if body.Username != "" {
+		title = "Discord / " + body.Username
+	}
+	return title, body.Content, 5, false, nil
+}
+
+func (r *Receiver) parseSlack(c *gin.Context, secret string) (string, string, int, bool, error) {
+	if err := verifyHeaderSecret(c, secret, "X-Webhook-Token", "X-Slack-Token"); err != nil {
+		return "", "", 0, false, err
+	}
+	var body struct {
+		Text        string `json:"text"`
+		Username    string `json:"username"`
+		ChannelName string `json:"channel_name"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		return "", "", 0, false, fmt.Errorf("invalid slack payload format: %w", err)
+	}
+	title := "Slack 消息"
+	if body.ChannelName != "" {
+		title = "Slack / #" + body.ChannelName
+	} else if body.Username != "" {
+		title = "Slack / " + body.Username
+	}
+	return title, body.Text, 5, false, nil
+}
+
 // --- Custom Incoming ---
-// 自定义格式：简单 JSON，签名通过 X-Signature header 或 URL token 参数验证
-// 支持 text 和 markdown 两种消息格式（通过 msgtype 字段区分）
 func (r *Receiver) parseCustom(c *gin.Context, secret string) (string, string, int, bool, error) {
 	rawBody, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		return "", "", 0, false, fmt.Errorf("failed to read request body: %w", err)
 	}
 
-	// 纯 HTML Content-Type 视为 markdown 格式
 	contentType := c.GetHeader("Content-Type")
 	if strings.HasPrefix(contentType, "text/html") {
 		title := "HTML 消息"
@@ -213,7 +390,6 @@ func (r *Receiver) parseCustom(c *gin.Context, secret string) (string, string, i
 		return title, content, 5, true, nil
 	}
 
-	// 验证 X-Signature header 签名
 	if secret != "" {
 		sig := c.GetHeader("X-Signature")
 		if sig != "" {
@@ -234,7 +410,6 @@ func (r *Receiver) parseCustom(c *gin.Context, secret string) (string, string, i
 	}
 
 	if err := json.Unmarshal(rawBody, &body); err != nil {
-		// 如果不是 JSON，当作纯文本
 		return "Webhook Message", string(rawBody), 5, false, nil
 	}
 
@@ -264,8 +439,22 @@ func (r *Receiver) parseCustom(c *gin.Context, secret string) (string, string, i
 	return title, message, priority, isMarkdown, nil
 }
 
-// --- Signature Verification Helpers ---
+func verifyHeaderSecret(c *gin.Context, secret string, headerKeys ...string) error {
+	if secret == "" {
+		return nil
+	}
+	for _, key := range headerKeys {
+		if c.GetHeader(key) == secret {
+			return nil
+		}
+	}
+	if c.Query("token") == secret {
+		return nil
+	}
+	return fmt.Errorf("invalid or missing token")
+}
 
+// --- Signature Verification Helpers ---
 func verifyDingTalkSign(timestamp, secret, expectedSign string) error {
 	ts, err := strconv.ParseInt(timestamp, 10, 64)
 	if err != nil {
