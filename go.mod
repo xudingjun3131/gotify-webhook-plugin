@@ -26,8 +26,6 @@ require (
 	github.com/alibabacloud-go/tea v1.2.3 // indirect
 	github.com/alibabacloud-go/tea-xml v1.1.3 // indirect
 	github.com/alibabacloud-go/tea-utils v1.4.5 // indirect
-	github.com/alibabacloud-go/tea-utils/service v1.4.5 // indirect
-	github.com/alibabacloud-go/tea-utils/v2/service v2.0.6 // indirect
 	github.com/alibabacloud-go/tea/v2 v2.2.3 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.36.3 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.18 // indirect
@@ -67,12 +65,6 @@ require (
 	github.com/quic-go/qpack v0.5.1 // indirect
 	github.com/quic-go/quic-go v0.55.0 // indirect
 	github.com/rogpeppe/go-internal v1.8.0 // indirect
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.0.1115 // indirect
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/errors v1.0.1115 // indirect
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/http v1.0.1115 // indirect
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/json v1.0.1115 // indirect
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile v1.0.1115 // indirect
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sms/v20210111 v1.0.1115 // indirect
 	github.com/tjfoc/gmsm v1.4.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.0 // indirect
