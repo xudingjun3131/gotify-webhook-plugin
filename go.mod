@@ -14,7 +14,7 @@ require (
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/gotify/plugin-api v1.0.0
 	github.com/stretchr/testify v1.11.1
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud v1.0.1167
+	github.com/tencentcloud/tencentcloud-sdk-go v3.0.1167+incompatible
 	golang.org/x/net v0.47.0
 )
 
