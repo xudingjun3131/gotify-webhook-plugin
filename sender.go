@@ -222,10 +222,10 @@ func (s *Sender) sendEmail(target TargetConfig, rawBody []byte, contentType stri
 }
 
 func (s *Sender) sendSNS(target TargetConfig, rawBody []byte) error {
-	subject, message := extractSubjectAndMessage(rawBody, target)
 	if target.TopicARN == "" && len(target.PhoneNumbers) == 0 {
 		return fmt.Errorf("sns target %s: topic_arn or phone_numbers is required", target.Name)
 	}
+	_ = rawBody
 	return fmt.Errorf("sns target %s: Amazon SNS SDK integration requires adding a verified AWS SDK module version in go.mod before build", target.Name)
 }
 
