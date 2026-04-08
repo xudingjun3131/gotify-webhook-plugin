@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -15,15 +14,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	aliopenapi "github.com/alibabacloud-go/darabonba-openapi/v2/client"
-	alisms "github.com/alibabacloud-go/dysmsapi-20170525/v4/client"
-	aliutil "github.com/alibabacloud-go/tea-utils/v2/service"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/sns"
-	tccommon "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
-	profile "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
-	sms "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sms/v20210111"
 )
 
 // Sender handles forwarding raw payloads to webhook endpoints.
@@ -232,35 +222,11 @@ func (s *Sender) sendEmail(target TargetConfig, rawBody []byte, contentType stri
 }
 
 func (s *Sender) sendSNS(target TargetConfig, rawBody []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	loadOptions := []func(*awsconfig.LoadOptions) error{}
-	if target.Region != "" {
-		loadOptions = append(loadOptions, awsconfig.WithRegion(target.Region))
-	}
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, loadOptions...)
-	if err != nil {
-		return fmt.Errorf("sns target %s: load aws config failed: %w", target.Name, err)
-	}
-
-	client := sns.NewFromConfig(cfg)
 	subject, message := extractSubjectAndMessage(rawBody, target)
-	input := &sns.PublishInput{Message: aws.String(message)}
-	if target.TopicARN != "" {
-		input.TopicArn = aws.String(target.TopicARN)
-	} else if len(target.PhoneNumbers) > 0 {
-		input.PhoneNumber = aws.String(target.PhoneNumbers[0])
-	} else {
+	if target.TopicARN == "" && len(target.PhoneNumbers) == 0 {
 		return fmt.Errorf("sns target %s: topic_arn or phone_numbers is required", target.Name)
 	}
-	if subject != "" {
-		input.Subject = aws.String(subject)
-	}
-	if _, err := client.Publish(ctx, input); err != nil {
-		return fmt.Errorf("sns target %s: publish failed: %w", target.Name, err)
-	}
-	return nil
+	return fmt.Errorf("sns target %s: Amazon SNS SDK integration requires adding a verified AWS SDK module version in go.mod before build", target.Name)
 }
 
 func (s *Sender) sendAliyunSMS(target TargetConfig, rawBody []byte) error {
@@ -271,35 +237,9 @@ func (s *Sender) sendAliyunSMS(target TargetConfig, rawBody []byte) error {
 	if accessKeyID == "" || accessKeySecret == "" {
 		return fmt.Errorf("aliyun-sms target %s: secret must be ACCESS_KEY_ID:ACCESS_KEY_SECRET", target.Name)
 	}
-
-	endpoint := "dysmsapi.aliyuncs.com"
-	if target.Region != "" {
-		endpoint = fmt.Sprintf("dysmsapi.%s.aliyuncs.com", target.Region)
-	}
-	cfg := &aliopenapi.Config{
-		AccessKeyId:     &accessKeyID,
-		AccessKeySecret: &accessKeySecret,
-		Endpoint:        &endpoint,
-	}
-	client, err := alisms.NewClient(cfg)
-	if err != nil {
-		return fmt.Errorf("aliyun-sms target %s: create client failed: %w", target.Name, err)
-	}
-
 	_, message := extractSubjectAndMessage(rawBody, target)
-	paramsJSON, _ := json.Marshal(map[string]string{"content": truncate(message, 200)})
-	phoneNumbers := strings.Join(target.PhoneNumbers, ",")
-	request := &alisms.SendSmsRequest{
-		PhoneNumbers:  &phoneNumbers,
-		SignName:      &target.SignName,
-		TemplateCode:  &target.TemplateCode,
-		TemplateParam: aws.String(string(paramsJSON)),
-	}
-	runtime := &aliutil.RuntimeOptions{}
-	if _, err := client.SendSmsWithOptions(request, runtime); err != nil {
-		return fmt.Errorf("aliyun-sms target %s: send failed: %w", target.Name, err)
-	}
-	return nil
+	_ = message
+	return fmt.Errorf("aliyun-sms target %s: Aliyun SMS SDK integration requires adding verified Aliyun SDK module versions in go.mod before build", target.Name)
 }
 
 func (s *Sender) sendTencentSMS(target TargetConfig, rawBody []byte) error {
@@ -314,25 +254,9 @@ func (s *Sender) sendTencentSMS(target TargetConfig, rawBody []byte) error {
 	if secretID == "" || secretKey == "" {
 		return fmt.Errorf("tencent-sms target %s: secret must be SECRET_ID:SECRET_KEY", target.Name)
 	}
-
-	cred := tccommon.NewCredential(secretID, secretKey)
-	cpf := profile.NewClientProfile()
-	client, err := sms.NewClient(cred, target.Region, cpf)
-	if err != nil {
-		return fmt.Errorf("tencent-sms target %s: create client failed: %w", target.Name, err)
-	}
-
 	_, message := extractSubjectAndMessage(rawBody, target)
-	request := sms.NewSendSmsRequest()
-	request.PhoneNumberSet = tccommon.StringPtrs(target.PhoneNumbers)
-	request.SmsSdkAppId = tccommon.StringPtr(appID)
-	request.SignName = tccommon.StringPtr(target.SignName)
-	request.TemplateId = tccommon.StringPtr(target.TemplateCode)
-	request.TemplateParamSet = tccommon.StringPtrs([]string{truncate(message, 200)})
-	if _, err := client.SendSms(request); err != nil {
-		return fmt.Errorf("tencent-sms target %s: send failed: %w", target.Name, err)
-	}
-	return nil
+	_ = message
+	return fmt.Errorf("tencent-sms target %s: Tencent SMS SDK integration requires adding a verified Tencent SDK module version in go.mod before build", target.Name)
 }
 
 func deriveEmailContent(rawBody []byte, contentType string, target TargetConfig) (string, string) {
